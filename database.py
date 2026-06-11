@@ -56,8 +56,16 @@ class User(Base):
     # 타임스탬프
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 구독 관련
+    subscription_tier = Column(String(20), default='free')
+    subscription_started_at = Column(DateTime, nullable=True)
+    subscription_expires_at = Column(DateTime, nullable=True)
+    template_download_count = Column(Integer, default=0)
+    last_download_reset_at = Column(DateTime, default=datetime.utcnow)
+    lesson_generation_count = Column(Integer, default=0)
     
-    # 관계 (다음 단계에서 사용)
+    # 관계
     saved_lessons = relationship("SavedLesson", back_populates="user", cascade="all, delete-orphan")
     
     def verify_password(self, plain_password: str) -> bool:
@@ -110,13 +118,6 @@ class SavedLesson(Base):
     
     # 관계
     user = relationship("User", back_populates="saved_lessons")
-    # 구독 관련 (자동 추가)
-    subscription_tier = Column(String(20), default='free')
-    subscription_started_at = Column(DateTime, nullable=True)
-    subscription_expires_at = Column(DateTime, nullable=True)
-    template_download_count = Column(Integer, default=0)
-    last_download_reset_at = Column(DateTime, default=datetime.utcnow)
-    lesson_generation_count = Column(Integer, default=0)
 
 
 class UserTemplate(Base):
@@ -208,9 +209,29 @@ class Notice(Base):
 # ============================================================
  
 def init_db():
-    """데이터베이스 테이블 생성"""
+    """데이터베이스 테이블 생성 + 기존 DB 컬럼 마이그레이션"""
     Base.metadata.create_all(bind=engine)
     print("✅ 데이터베이스 테이블 생성 완료")
+
+    # 기존 DB에 새 컬럼이 없으면 ALTER TABLE로 추가 (SQLite 호환)
+    from sqlalchemy import text
+    migrations = [
+        ("users", "subscription_tier",        "ALTER TABLE users ADD COLUMN subscription_tier TEXT DEFAULT 'free'"),
+        ("users", "subscription_started_at",  "ALTER TABLE users ADD COLUMN subscription_started_at DATETIME"),
+        ("users", "subscription_expires_at",  "ALTER TABLE users ADD COLUMN subscription_expires_at DATETIME"),
+        ("users", "template_download_count",  "ALTER TABLE users ADD COLUMN template_download_count INTEGER DEFAULT 0"),
+        ("users", "last_download_reset_at",   "ALTER TABLE users ADD COLUMN last_download_reset_at DATETIME"),
+        ("users", "lesson_generation_count",  "ALTER TABLE users ADD COLUMN lesson_generation_count INTEGER DEFAULT 0"),
+        ("users", "full_name",                "ALTER TABLE users ADD COLUMN full_name TEXT"),
+    ]
+    with engine.connect() as conn:
+        for table, col, sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"  ✅ 마이그레이션: {table}.{col} 추가됨")
+            except Exception:
+                pass  # 이미 존재하면 무시
  
  
 def get_db():

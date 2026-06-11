@@ -303,7 +303,49 @@ def _gemini_fill_data_cells(
                 text = text[4:].strip()
             text = text.split("```")[0].strip()
 
-        result = json.loads(text)
+        # JSON 파싱 시도 — 실패 시 자동 복구
+        def try_parse(raw: str) -> dict:
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+
+            # 1차 복구: 잘린 JSON 끝 처리 (마지막 완전한 fill 항목까지만 살리기)
+            try:
+                last_brace = raw.rfind('}')
+                if last_brace != -1:
+                    candidate = raw[:last_brace + 1]
+                    # fills 배열이 닫히지 않은 경우 닫아주기
+                    if '"fills"' in candidate and candidate.count('[') > candidate.count(']'):
+                        candidate = candidate + ']}'
+                    elif '"fills"' in candidate and not candidate.rstrip().endswith('}}'):
+                        candidate = candidate + '}'
+                    return json.loads(candidate)
+            except Exception:
+                pass
+
+            # 2차 복구: fills 배열만 추출
+            try:
+                import re as _re
+                m = _re.search(r'"fills"\s*:\s*(\[.*?\])', raw, _re.S)
+                if m:
+                    arr = json.loads(m.group(1))
+                    return {"fills": arr}
+            except Exception:
+                pass
+
+            # 3차 복구: 개별 {"id":N, "content":"..."} 패턴 추출
+            try:
+                import re as _re
+                items = _re.findall(r'\{[^{}]*?"id"\s*:\s*(\d+)[^{}]*?"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}', raw)
+                if items:
+                    return {"fills": [{"id": int(i), "content": c} for i, c in items]}
+            except Exception:
+                pass
+
+            raise ValueError(f"JSON 복구 실패. 원본 앞 200자: {raw[:200]}")
+
+        result = try_parse(text)
         fills = result.get("fills", [])
 
         # id → (ti, ri, ci) 매핑

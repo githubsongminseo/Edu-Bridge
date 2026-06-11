@@ -1208,6 +1208,35 @@ def api_get_applied_templates(lesson_id: int, current_user: User = Depends(get_c
     return result
 
 
+@app.get("/api/applied-templates/all")
+def api_get_all_applied(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """현재 사용자의 모든 양식 적용 파일 (보관함용)"""
+    results = (
+        db.query(AppliedTemplate, SavedLesson)
+        .join(SavedLesson, AppliedTemplate.saved_lesson_id == SavedLesson.id)
+        .filter(SavedLesson.user_id == current_user.id)
+        .order_by(AppliedTemplate.created_at.desc())
+        .all()
+    )
+    output = []
+    for applied, lesson in results:
+        fills = json.loads(applied.fills_json) if applied.fills_json else []
+        output.append({
+            "id": applied.id,
+            "template_id": applied.user_template_id,
+            "template_name": applied.template_name,
+            "lesson_title": lesson.title,
+            "lesson_search_query": lesson.search_query,
+            "country_code": lesson.country_code,
+            "age": lesson.age,
+            "duration": lesson.duration,
+            "saved_lesson_id": applied.saved_lesson_id,
+            "fills_count": len(fills),
+            "created_at": applied.created_at.isoformat(),
+        })
+    return output
+
+
 @app.get("/api/applied-templates/{applied_id}")
 def api_get_applied_detail(applied_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """양식 적용 이력 상세 (수정/재다운로드용)"""
@@ -1256,36 +1285,6 @@ def api_delete_applied(applied_id: int, current_user: User = Depends(get_current
     db.delete(applied)
     db.commit()
     return {"message": "삭제됨"}
-
-
-
-@app.get("/api/applied-templates/all")
-def api_get_all_applied(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """현재 사용자의 모든 양식 적용 파일 (보관함용)"""
-    results = (
-        db.query(AppliedTemplate, SavedLesson)
-        .join(SavedLesson, AppliedTemplate.saved_lesson_id == SavedLesson.id)
-        .filter(SavedLesson.user_id == current_user.id)
-        .order_by(AppliedTemplate.created_at.desc())
-        .all()
-    )
-    output = []
-    for applied, lesson in results:
-        fills = json.loads(applied.fills_json) if applied.fills_json else []
-        output.append({
-            "id": applied.id,
-            "template_id": applied.user_template_id,
-            "template_name": applied.template_name,
-            "lesson_title": lesson.title,
-            "lesson_search_query": lesson.search_query,
-            "country_code": lesson.country_code,
-            "age": lesson.age,
-            "duration": lesson.duration,
-            "saved_lesson_id": applied.saved_lesson_id,
-            "fills_count": len(fills),
-            "created_at": applied.created_at.isoformat(),
-        })
-    return output
 
 
 
@@ -1387,6 +1386,38 @@ def api_community_create(body: dict, current_user: User = Depends(get_current_us
     db.commit()
     db.refresh(post)
     return {"id": post.id, "message": "작성 완료"}
+
+
+@app.put("/api/community/posts/{post_id}")
+def api_community_update(post_id: int, body: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """게시글 수정 (작성자만)"""
+    post = db.query(CommunityPost).filter(CommunityPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="게시글 없음")
+    if post.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="권한 없음")
+    title = (body.get("title") or "").strip()
+    content = (body.get("content") or "").strip()
+    category = body.get("category") or post.category
+    if not title or not content:
+        raise HTTPException(status_code=400, detail="제목과 내용을 입력하세요")
+    post.title = title[:200]
+    post.content = content
+    post.category = category
+    post.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "수정됨"}
+
+
+@app.post("/api/community/posts/{post_id}/report")
+def api_community_report(post_id: int, body: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """게시글 신고 (로그인 필요, 단순 로그)"""
+    post = db.query(CommunityPost).filter(CommunityPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="게시글 없음")
+    reason = (body.get("reason") or "기타").strip()[:200]
+    print(f"[REPORT] post_id={post_id} by user_id={current_user.id} reason={reason}")
+    return {"message": "신고가 접수되었습니다. 검토 후 조치합니다."}
 
 
 @app.delete("/api/community/posts/{post_id}")
@@ -1546,9 +1577,9 @@ def api_my_subscription(current_user: User = Depends(get_current_user)):
             trial_active = True
             days_left = (trial_end - datetime.utcnow()).days + 1
 
-    is_free_post_trial = (current_user.subscription_tier == 'free' and not trial_active)
+    is_free_post_trial = (tier == 'free' and not trial_active)
     return {
-        "tier": current_user.subscription_tier or 'free',
+        "tier": tier,
         "trial_active": trial_active,
         "trial_days_left": days_left,
         "is_free_post_trial": is_free_post_trial,
