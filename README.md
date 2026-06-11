@@ -1,3 +1,209 @@
+# 시스템 안내 가이드 
+# EDU-bridge 🌏
+
+> **유아교육 현장 교사를 위한 AI 기반 지도안 자동 생성 플랫폼**
+>
+> 10개국 유아교육과정 데이터를 RAG로 검색해 수업 주제에 맞는 지도안 카드를 제안하고,
+> 우리 유치원 양식(.docx)에 자동으로 채워주는 서비스입니다.
+
+---
+
+## ✨ 주요 기능
+
+| 기능 | 설명 |
+|------|------|
+| 🎯 **Play-Scanner** | 키워드/사진 입력 → 10개국 교육과정 RAG 검색 → 지도안 카드 3장 제안 → 지도안 자동 생성 |
+| 📋 **내 양식 자동 채우기** | .docx 양식 업로드 → AI 셀 의미 분석 → 지도안 내용 자동 채우기 → 수정 채팅 → .docx 다운로드 |
+| 💌 **AI 알림장** | 활동 사진 + 메모 → 학부모 알림장 자동 생성 (톤 선택 가능) |
+| 💬 **교사 커뮤니티** | 글쓰기·댓글·좋아요·수정·신고 |
+| 🔐 **회원 시스템** | 로그인·마이페이지·구독 플랜·무료체험 14일 |
+| 📁 **파일 보관함** | 양식 적용된 지도안 저장 및 이력 관리 |
+
+---
+
+## 🏗️ 시스템 구조
+
+```
+User input (키워드 / 사진)
+    ↓
+Frontend (HTML / CSS / Vanilla JS)
+    ↓
+Backend + FastAPI
+    ├── POST /api/extract     키워드 추출 (Gemini Flash-Lite)
+    ├── POST /api/cards       카드 생성 (RAG + Gemini Flash-Lite)
+    └── POST /api/lesson      지도안 생성 (Gemini Flash)
+         ↓
+AI / RAG Pipeline
+    Stage A : 키워드 추출       → Gemini Flash-Lite
+    Stage B-D: RAG 검색         → ChromaDB (bge-m3) · 3-weight scoring
+    Stage E : 카드 생성          → Gemini Flash-Lite
+    Stage F : 지도안 생성        → Gemini Flash
+         ↓
+내 양식 파이프라인
+    .docx 업로드 → 양식 분석 → 셀 매핑 → AI 채우기 → 미리보기/수정 → .docx 출력
+```
+
+**RAG 검색 가중치 수식**
+```
+S = a·max(C) + b·avg(C) + g·sim(q, P)
+```
+- `C` : 청크 코사인 유사도
+- `q` : 쿼리 벡터
+- `P` : 국가 철학 요약 벡터
+
+---
+
+## 🗂️ 폴더 구조
+
+```
+backend/
+├── main.py                        # FastAPI 진입점 (전체 API 라우터)
+├── database.py                    # SQLAlchemy 모델 (User, SavedLesson, ...)
+├── auth.py                        # JWT 인증
+├── requirements.txt
+│
+├── services/
+│   ├── retriever.py               # 3-weight RAG 검색
+│   ├── keyword_extractor.py       # Gemini 키워드 추출
+│   ├── card_generator.py          # 지도안 카드 3장 생성
+│   ├── lesson_planner.py          # 지도안 전문 생성
+│   ├── template_analyzer.py       # .docx 양식 구조 분석 + AI 셀 채우기
+│   ├── template_filler.py         # 셀 내용 채우기 (Gemini)
+│   ├── template_parser.py         # .docx 파싱
+│   ├── docx_writer.py             # .docx 출력
+│   └── applied_template_service.py
+│
+├── static/
+│   └── edu-bridge-full.html       # 단일 HTML 프론트엔드 (SPA)
+│
+├── data/
+│   ├── all_chunks.json            # ChromaDB 적재용 (163개 청크, 10개국)
+│   └── all_countries.json         # 국가별 철학 요약 + 메타데이터
+│
+├── data_level0.bin                # ChromaDB 벡터 인덱스
+├── header.bin
+├── length.bin
+└── link_lists.bin
+```
+
+---
+
+## ⚙️ 기술 스택
+
+| 분류 | 기술 |
+|------|------|
+| Backend | FastAPI · Uvicorn · SQLite · SQLAlchemy |
+| Frontend | Vanilla JS · HTML · CSS (Single HTML SPA) |
+| AI | Gemini Flash · Gemini Flash-Lite (Google GenAI) |
+| Vector DB | ChromaDB · bge-m3 (On-device 임베딩) |
+| 문서 처리 | python-docx |
+| 인증 | JWT (python-jose) |
+| 외부 접속 | ngrok (베타) |
+
+---
+
+## 🚀 실행 방법
+
+### 1. 환경 설정
+
+```bash
+cd ~/Desktop/AI_system/backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. 환경변수 설정
+
+`.env` 파일 생성:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+SECRET_KEY=your_jwt_secret_key
+```
+
+### 3. 서버 실행
+
+```bash
+source venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 4. 외부 접속 (ngrok)
+
+```bash
+ngrok http 8000 --request-header-add "ngrok-skip-browser-warning: true"
+```
+
+브라우저에서 `http://localhost:8000` 접속
+
+---
+
+## 📡 주요 API 엔드포인트
+
+| Method | URL | 설명 |
+|--------|-----|------|
+| POST | `/api/extract` | 키워드 추출 |
+| POST | `/api/cards` | 지도안 카드 생성 |
+| POST | `/api/lesson` | 지도안 생성 |
+| POST | `/api/lessons/save` | 지도안 저장 |
+| GET | `/api/lessons/my` | 내 지도안 목록 |
+| POST | `/api/templates/upload` | 양식 업로드 |
+| POST | `/api/lesson/preview-fills` | 양식 미리보기 |
+| POST | `/api/applied-templates/save` | 양식 적용 파일 저장 |
+| GET | `/api/applied-templates/all` | 파일 보관함 목록 |
+| POST | `/api/community/posts` | 커뮤니티 글 작성 |
+| GET | `/api/me` | 내 정보 |
+| GET | `/api/me/subscription` | 구독 정보 |
+
+전체 API 문서: `http://localhost:8000/docs`
+
+---
+
+## 🗄️ 데이터베이스
+
+SQLite (`edubridge.db`) — 서버 첫 실행 시 자동 생성
+
+| 테이블 | 설명 |
+|--------|------|
+| `users` | 회원 정보 · 구독 상태 |
+| `saved_lessons` | 저장된 지도안 |
+| `user_templates` | 업로드된 양식 |
+| `applied_templates` | 양식 적용 이력 (파일 보관함) |
+| `community_posts` | 커뮤니티 게시글 |
+| `community_comments` | 댓글 |
+| `community_likes` | 좋아요 |
+| `notices` | 공지사항 |
+
+---
+
+## ⚠️ 현재 한계 및 향후 개선
+
+| 한계 | 개선 방향 |
+|------|-----------|
+| ngrok 로컬 서버 → 서버 종료 시 중단 | AWS / Railway 클라우드 배포 전환 |
+| hwp 양식 미지원 | LibreOffice 변환 파이프라인 도입 |
+| Gemini JSON 파싱 오류 간헐 발생 | 자동 복구 로직 적용 완료 · 프롬프트 고도화 |
+| 도메인 특화 어휘 불일치 (미술성 등) | LOV 기반 교육 온톨로지 어휘 확장 레이어 도입 |
+| 10개국 163청크 | 국가 수 확장 · 최신 교육과정 주기적 업데이트 |
+
+---
+
+## 👥 팀
+
+EDU-bridge 개발팀
+
+---
+
+*베타 버전 · 2026년 6월 기준*
+
+
+
+
+
+
+
+
 # 초코소라빵 RAG 백엔드
 
 10개국 유아교육과정 RAG 시스템의 백엔드.
